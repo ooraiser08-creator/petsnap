@@ -52,12 +52,10 @@ try:
     supabase = create_client(supabase_url, supabase_key)
     
 except:
-    # 本地開發備用 (如果 secrets 沒設好)
     st.error("系統設定有誤，請檢查 Secrets")
     st.stop()
 
 # --- 3. 用戶追蹤 (Session ID) ---
-# 這是為了記住「這個人是誰」，以此來限制免費次數
 if 'user_id' not in st.session_state:
     st.session_state.user_id = str(uuid.uuid4())
 
@@ -94,13 +92,37 @@ if uploaded_file is not None:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-2.5-flash')
 
-            # --- Prompt ---
+            # --- Prompt (全面禁止 Emoji) ---
             if target_language == "English":
-                prompt = "Analyze this photo. Write ONE short, funny, sassy internal monologue. Strict Rules: Max 15 words. No intro. Use Gen Z slang."
+                prompt = """
+                Analyze this photo. Write ONE short, funny, sassy internal monologue. 
+                
+                STRICT RULES: 
+                1. Max 15 words. 
+                2. No intro. 
+                3. Use Gen Z slang.
+                4. DO NOT use emojis. (No smiley faces, no symbols)
+                """
             elif target_language == "Thai (ภาษาไทย)":
-                prompt = "Act as a humorous Thai pet psychic. Write ONE short OS in Thai. Strict Rules: Max 20 words. Use Thai teen slang. No intro."
+                prompt = """
+                Act as a humorous Thai pet psychic. Write ONE short OS in Thai. 
+                
+                STRICT RULES: 
+                1. Max 20 words. 
+                2. Use Thai teen slang. 
+                3. No intro.
+                4. DO NOT use emojis. (ห้ามใช้อิโมจิเด็ดขาด)
+                """
             else:
-                prompt = "請看這張照片。寫一句這隻寵物現在心裡的 OS。嚴格規則：繁體中文，台灣鄉民梗，有點賤賤的。20字以內。不要前言。"
+                prompt = """
+                請看這張照片。寫一句這隻寵物現在心裡的 OS。
+                
+                嚴格規則：
+                1. 繁體中文，台灣鄉民梗，有點賤賤的。
+                2. 不超過 20 個字。
+                3. 不要前言。
+                4. 【絕對不要】使用任何 Emoji 或表情符號 (例如 🤣, 🔥, 👀)。
+                """
 
             with st.spinner(loading):
                 # A. AI 生成文字
@@ -110,17 +132,17 @@ if uploaded_file is not None:
                 # B. 圖片合成
                 final_image = create_polaroid(image, os_text, target_language)
                 
-                # C. [Day 3 新功能] 上傳與存檔
-                # 1. 把圖片轉成 bytes 準備上傳
+                # C. 上傳與存檔
+                # 1. 轉成 bytes
                 img_byte_arr = io.BytesIO()
                 final_image.save(img_byte_arr, format='JPEG', quality=80)
                 img_bytes = img_byte_arr.getvalue()
                 
-                # 2. 產生檔名 (用 user_id + 時間，避免重複)
+                # 2. 檔名
                 timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
                 file_name = f"{user_id}_{timestamp}.jpg"
                 
-                # 3. 上傳到 Supabase Storage ('photos' bucket)
+                # 3. 上傳到 Supabase Storage
                 try:
                     supabase.storage.from_("photos").upload(
                         path=file_name,
@@ -133,13 +155,13 @@ if uploaded_file is not None:
                     print(f"Upload Error: {e}")
                     public_url = "upload_failed"
 
-                # 4. 寫入資料庫 ('logs' table)
+                # 4. 寫入資料庫
                 try:
                     data = {
-                        "user_id": user_id,  # 誰做的
-                        "image_url": public_url, # 圖在哪
-                        "ai_text": os_text,  # 說了什麼
-                        "session_id": user_id # 暫時跟 user_id 一樣
+                        "user_id": user_id,
+                        "image_url": public_url,
+                        "ai_text": os_text,
+                        "session_id": user_id
                     }
                     supabase.table("logs").insert(data).execute()
                 except Exception as e:
