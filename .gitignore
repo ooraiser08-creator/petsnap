@@ -1,0 +1,9 @@
+# 忽略金庫檔案
+.streamlit/secrets.toml
+secrets.toml
+.env
+
+# 忽略系統垃圾檔
+__pycache__/
+*.pyc
+.DS_Store
