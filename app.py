@@ -10,7 +10,8 @@ import extra_streamlit_components as stx
 import time
 
 # --- 設定區 ---
-LEMON_SQUEEZY_LINK = "https://petos.lemonsqueezy.com/checkout/buy/da91c266-7236-4a64-aea8-79cdce90706d"
+# 請確認這裡是你自己的 Lemon Squeezy 連結
+LEMON_SQUEEZY_LINK = "https://petos.lemonsqueezy.com/checkout/buy/......" 
 ACCESS_CODE = "VIP2025"
 FREE_LIMIT = 3
 
@@ -63,25 +64,20 @@ except:
     st.error("系統設定有誤，請檢查 Secrets")
     st.stop()
 
-# --- 3. [關鍵修正] Cookie 認人機制 ---
+# --- 3. Cookie 認人機制 ---
 cookie_manager = stx.CookieManager()
-
-# 嘗試讀取餅乾
 cookies = cookie_manager.get_all()
 user_id = cookies.get("petos_user_id")
 
-# 如果沒有餅乾 (新用戶)，發一個給他
 if not user_id:
     new_id = str(uuid.uuid4())
     cookie_manager.set("petos_user_id", new_id, expires_at=datetime.datetime(year=2030, month=1, day=1))
     user_id = new_id
-    time.sleep(0.5) # 等待餅乾寫入
-    st.rerun() # 重新整理以讀取餅乾
+    time.sleep(0.5)
+    st.rerun()
 
-# 檢查是否已解鎖 (使用 Cookie 紀錄 VIP 狀態)
 is_premium = cookies.get("petos_is_premium") == "true"
 
-# 側邊欄：輸入通行碼
 with st.sidebar:
     st.header("💎 Premium Access")
     code_input = st.text_input("Enter Access Code", type="password")
@@ -116,12 +112,11 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, use_column_width=True)
 
-    # --- 判斷權限 (收費牆) ---
+    # --- 判斷權限 ---
     if not is_premium:
         if remaining_usage > 0:
             st.markdown(f'<div class="usage-counter">⚡ Free tries left: {remaining_usage} / {FREE_LIMIT}</div>', unsafe_allow_html=True)
         else:
-            # 擋住！
             st.error("🚫 Free limit reached! (免費次數已用完)")
             st.markdown(f"""
                 <div style="text-align: center; padding: 20px; border: 2px dashed #FF4B4B; border-radius: 10px; margin-top: 10px;">
@@ -175,6 +170,7 @@ if uploaded_file is not None:
                 timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
                 file_name = f"{user_id}_{timestamp}.jpg"
                 
+                # 上傳 Supabase (這裡已經會扣除次數了，因為 insert logs 了)
                 try:
                     supabase.storage.from_("photos").upload(path=file_name, file=img_bytes, file_options={"content-type": "image/jpeg"})
                     public_url = supabase.storage.from_("photos").get_public_url(file_name)
@@ -203,8 +199,9 @@ if uploaded_file is not None:
                     use_container_width=True
                 )
                 
-                time.sleep(1)
-                st.rerun() # 強制刷新以更新次數
+                # [修正] 移除自動刷新，讓圖片停留在畫面上
+                # time.sleep(1)
+                # st.rerun() 
 
         except Exception as e:
             st.error(f"Error: {e}")
