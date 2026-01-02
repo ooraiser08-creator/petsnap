@@ -6,11 +6,13 @@ import uuid
 import datetime
 from supabase import create_client
 from image_maker import create_polaroid
+import extra_streamlit_components as stx
+import time
 
-# --- 設定區 (請修改這裡) ---
+# --- 設定區 ---
 LEMON_SQUEEZY_LINK = "https://petos.lemonsqueezy.com/checkout/buy/da91c266-7236-4a64-aea8-79cdce90706d"
-ACCESS_CODE = "VIP2025" # 這是給付費用戶的通關密語
-FREE_LIMIT = 3 # 免費次數
+ACCESS_CODE = "VIP2025"
+FREE_LIMIT = 3
 
 # --- 1. 網頁基礎設定 ---
 st.set_page_config(
@@ -61,29 +63,41 @@ except:
     st.error("系統設定有誤，請檢查 Secrets")
     st.stop()
 
-# --- 3. 用戶身份與權限管理 ---
-if 'user_id' not in st.session_state:
-    st.session_state.user_id = str(uuid.uuid4())
-user_id = st.session_state.user_id
+# --- 3. [關鍵修正] Cookie 認人機制 ---
+@st.cache_resource(experimental_allow_widgets=True)
+def get_manager():
+    return stx.CookieManager()
 
-# 檢查是否已解鎖 (輸入過通行碼)
-if 'is_premium' not in st.session_state:
-    st.session_state.is_premium = False
+cookie_manager = get_manager()
 
-# 側邊欄：輸入通行碼的地方
+# 嘗試讀取餅乾
+cookies = cookie_manager.get_all()
+user_id = cookies.get("petos_user_id")
+
+# 如果沒有餅乾 (新用戶)，發一個給他
+if not user_id:
+    new_id = str(uuid.uuid4())
+    cookie_manager.set("petos_user_id", new_id, expires_at=datetime.datetime(year=2030, month=1, day=1))
+    user_id = new_id
+    time.sleep(0.5) # 等待餅乾寫入
+    st.rerun() # 重新整理以讀取餅乾
+
+# 檢查是否已解鎖 (使用 Cookie 紀錄 VIP 狀態)
+is_premium = cookies.get("petos_is_premium") == "true"
+
+# 側邊欄：輸入通行碼
 with st.sidebar:
     st.header("💎 Premium Access")
-    code_input = st.text_input("Enter Access Code (輸入通行碼)", type="password")
+    code_input = st.text_input("Enter Access Code", type="password")
     if code_input == ACCESS_CODE:
-        st.session_state.is_premium = True
-        st.success("Verified! You are Premium. 🎉")
-    elif code_input:
-        st.error("Invalid Code")
+        cookie_manager.set("petos_is_premium", "true", expires_at=datetime.datetime(year=2030, month=1, day=1))
+        st.success("Verified! Refreshing...")
+        time.sleep(1)
+        st.rerun()
 
-# --- 4. 查詢使用次數 (關鍵邏輯) ---
+# --- 4. 查詢使用次數 ---
 def get_usage_count(uid):
     try:
-        # 去資料庫數數看這個人用了幾次
         response = supabase.table("logs").select("id", count="exact").eq("user_id", uid).execute()
         return response.count
     except:
@@ -106,12 +120,12 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, use_column_width=True)
 
-    # --- 判斷權限 ---
-    if not st.session_state.is_premium:
+    # --- 判斷權限 (收費牆) ---
+    if not is_premium:
         if remaining_usage > 0:
             st.markdown(f'<div class="usage-counter">⚡ Free tries left: {remaining_usage} / {FREE_LIMIT}</div>', unsafe_allow_html=True)
         else:
-            # --- 收費牆 (Paywall) ---
+            # 擋住！
             st.error("🚫 Free limit reached! (免費次數已用完)")
             st.markdown(f"""
                 <div style="text-align: center; padding: 20px; border: 2px dashed #FF4B4B; border-radius: 10px; margin-top: 10px;">
@@ -123,15 +137,13 @@ if uploaded_file is not None:
                         </button>
                     </a>
                     <p style="font-size: 0.8rem; margin-top: 10px; color: #666;">
-                        Already paid? Enter your code in the sidebar (左上角箭頭).
+                        Already paid? Enter code in sidebar ↖️
                     </p>
                 </div>
             """, unsafe_allow_html=True)
-            st.stop() # 停止執行下面的程式，不讓按鈕出現
+            st.stop()
 
-    # --- 核心運作區 (只有沒被擋住才會執行到這裡) ---
-    
-    # 設定按鈕文字
+    # --- 核心運作區 ---
     if target_language == "English":
         btn_text = "🔮 Read My Pet's Mind!"
         loading = "Connecting to Pet Planet..."
@@ -155,14 +167,11 @@ if uploaded_file is not None:
                 prompt = "請看這張照片。寫一句這隻寵物現在心裡的 OS。嚴格規則：繁體中文，台灣鄉民梗，有點賤賤的。20字以內。不要前言。絕對不要用表情符號。"
 
             with st.spinner(loading):
-                # A. AI 生成
                 response = model.generate_content([prompt, image])
                 os_text = response.text
                 
-                # B. 圖片合成
                 final_image = create_polaroid(image, os_text, target_language)
                 
-                # C. 上傳與存檔
                 img_byte_arr = io.BytesIO()
                 final_image.save(img_byte_arr, format='JPEG', quality=80)
                 img_bytes = img_byte_arr.getvalue()
@@ -187,7 +196,6 @@ if uploaded_file is not None:
                 except Exception as e:
                     print(f"DB Error: {e}")
 
-                # --- 顯示結果 ---
                 st.success("Analysis Complete!")
                 st.image(final_image, caption="Generated by PetOS", use_column_width=True)
                 
@@ -199,8 +207,8 @@ if uploaded_file is not None:
                     use_container_width=True
                 )
                 
-                # 重新整理頁面以更新次數 (選做)
-                # st.rerun() 
+                time.sleep(1)
+                st.rerun() # 強制刷新以更新次數
 
         except Exception as e:
             st.error(f"Error: {e}")
