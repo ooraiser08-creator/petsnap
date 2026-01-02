@@ -10,10 +10,9 @@ import extra_streamlit_components as stx
 import time
 
 # --- ⚙️ 設定區 ---
-# 請確認這是你的 Lemon Squeezy 結帳連結
 LEMON_SQUEEZY_LINK = "https://petos.lemonsqueezy.com/checkout/buy/da91c266-7236-4a64-aea8-79cdce90706d" 
-ACCESS_CODE = "VIP2025" # 付費解鎖碼
-FREE_LIMIT = 3 # 免費次數
+ACCESS_CODE = "VIP2025"
+FREE_LIMIT = 3
 
 # --- 1. 網頁基礎設定 ---
 st.set_page_config(
@@ -60,45 +59,64 @@ try:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     
-    # 連線 Supabase
     supabase = create_client(supabase_url, supabase_key)
-    
-    # 設定 Gemini (使用最穩定的 1.5-flash)
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-
 except Exception as e:
-    st.error(f"系統設定錯誤，請檢查 Secrets: {e}")
+    st.error(f"系統設定錯誤: {e}")
     st.stop()
 
-# --- 3. [優化版] Cookie + Session 雙重認人機制 ---
-# 初始化 Cookie 管理器
-cookie_manager = stx.CookieManager(key="petos_manager")
-
-# A. 先檢查 Session (記憶體)，這最快且最準
-if 'user_id' not in st.session_state:
-    # B. 如果記憶體沒有，才去檢查瀏覽器 Cookie
-    cookie_id = cookie_manager.get("petos_user_id")
+# --- [關鍵功能] 智慧模型輪詢函式 (自動換備胎) ---
+def generate_content_safe(prompt, image):
+    # 這是我們的備選清單，依照優先順序排列
+    # 包含了你帳號裡可能有的所有新舊版本
+    model_list = [
+        'gemini-2.5-flash',       # 第一順位：最新版 (你之前截圖裡有)
+        'gemini-1.5-flash-001',   # 第二順位：最穩定的第一代
+        'gemini-1.5-flash-002',   # 第三順位：第二代
+        'gemini-2.0-flash-exp',   # 第四順位：實驗版
+        'gemini-1.5-flash',       # 第五順位：通用別名
+        'gemini-1.5-pro'          # 最後保底
+    ]
     
+    last_error = None
+    
+    for model_name in model_list:
+        try:
+            # 嘗試建立模型
+            model = genai.GenerativeModel(model_name)
+            # 嘗試生成
+            response = model.generate_content([prompt, image])
+            # 成功就直接回傳，不試了
+            return response
+        except Exception as e:
+            # 失敗了就在後台印出錯誤，然後試下一個
+            print(f"模型 {model_name} 失敗，嘗試下一個... ({e})")
+            last_error = e
+            continue
+            
+    # 如果全部都失敗，才拋出錯誤給用戶看
+    raise last_error
+
+# --- 3. Cookie 認人機制 ---
+cookie_manager = stx.CookieManager(key="petos_manager_v2") # 改個 key 強制重整
+cookies = cookie_manager.get_all()
+
+# Session State 優先檢查
+if 'user_id' not in st.session_state:
+    cookie_id = cookies.get("petos_user_id")
     if cookie_id:
-        # 找到了！寫入記憶體，不用重整
         st.session_state.user_id = cookie_id
     else:
-        # 真的沒找到 (新用戶)，生成新的 ID
         new_id = str(uuid.uuid4())
-        # 寫入 Cookie (有效期 10 年)
-        cookie_manager.set("petos_user_id", new_id, expires_at=datetime.datetime(year=2035, month=1, day=1))
-        # 寫入 Session
+        cookie_manager.set("petos_user_id", new_id, expires_at=datetime.datetime(year=2030, month=1, day=1))
         st.session_state.user_id = new_id
-        # 等待寫入
         time.sleep(0.5)
 
-# 確定拿到 User ID
 user_id = st.session_state.user_id
 
-# 檢查付費狀態 (同樣邏輯：先看 Session，再看 Cookie)
+# 檢查付費
 if 'is_premium' not in st.session_state:
-    cookie_premium = cookie_manager.get("petos_is_premium")
+    cookie_premium = cookies.get("petos_is_premium")
     st.session_state.is_premium = (cookie_premium == "true")
 
 is_premium = st.session_state.is_premium
@@ -108,8 +126,7 @@ with st.sidebar:
     st.header("💎 Premium Access")
     code_input = st.text_input("Enter Access Code", type="password")
     if code_input == ACCESS_CODE:
-        # 寫入 Cookie 和 Session
-        cookie_manager.set("petos_is_premium", "true", expires_at=datetime.datetime(year=2035, month=1, day=1))
+        cookie_manager.set("petos_is_premium", "true", expires_at=datetime.datetime(year=2030, month=1, day=1))
         st.session_state.is_premium = True
         st.success("Verified! Refreshing...")
         time.sleep(1)
@@ -140,12 +157,10 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, use_column_width=True)
 
-    # --- 判斷權限 (收費牆) ---
     if not is_premium:
         if remaining_usage > 0:
             st.markdown(f'<div class="usage-counter">⚡ Free tries left: {remaining_usage} / {FREE_LIMIT}</div>', unsafe_allow_html=True)
         else:
-            # --- 擋住！顯示付款按鈕 ---
             st.error("🚫 Free limit reached! (免費次數已用完)")
             st.markdown(f"""
                 <div style="text-align: center; padding: 20px; border: 2px dashed #FF4B4B; border-radius: 10px; margin-top: 10px;">
@@ -161,9 +176,8 @@ if uploaded_file is not None:
                     </p>
                 </div>
             """, unsafe_allow_html=True)
-            st.stop() # 停止執行下方代碼
+            st.stop()
 
-    # --- 核心運作區 (付費或有額度才執行) ---
     if target_language == "English":
         btn_text = "🔮 Read My Pet's Mind!"
         loading = "Connecting to Pet Planet..."
@@ -176,7 +190,6 @@ if uploaded_file is not None:
 
     if st.button(btn_text):
         try:
-            # --- Prompt (嚴格禁止 Emoji) ---
             if target_language == "English":
                 prompt = "Analyze this photo. Write ONE short, funny, sassy internal monologue. Strict Rules: Max 15 words. No intro. Use Gen Z slang. DO NOT use emojis."
             elif target_language == "Thai (ภาษาไทย)":
@@ -185,14 +198,12 @@ if uploaded_file is not None:
                 prompt = "請看這張照片。寫一句這隻寵物現在心裡的 OS。嚴格規則：繁體中文，台灣鄉民梗，有點賤賤的。20字以內。不要前言。絕對不要用表情符號。"
 
             with st.spinner(loading):
-                # A. AI 生成
-                response = model.generate_content([prompt, image])
+                # 呼叫我們的「智慧防當機」函式
+                response = generate_content_safe(prompt, image)
                 os_text = response.text
                 
-                # B. 圖片合成
                 final_image = create_polaroid(image, os_text, target_language)
                 
-                # C. 上傳與存檔
                 img_byte_arr = io.BytesIO()
                 final_image.save(img_byte_arr, format='JPEG', quality=80)
                 img_bytes = img_byte_arr.getvalue()
@@ -200,18 +211,12 @@ if uploaded_file is not None:
                 timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
                 file_name = f"{user_id}_{timestamp}.jpg"
                 
-                # 上傳 Supabase Storage
                 try:
-                    supabase.storage.from_("photos").upload(
-                        path=file_name, 
-                        file=img_bytes, 
-                        file_options={"content-type": "image/jpeg"}
-                    )
+                    supabase.storage.from_("photos").upload(path=file_name, file=img_bytes, file_options={"content-type": "image/jpeg"})
                     public_url = supabase.storage.from_("photos").get_public_url(file_name)
                 except:
                     public_url = "upload_failed"
 
-                # 寫入 Supabase Database
                 try:
                     data = {
                         "user_id": user_id,
@@ -223,22 +228,19 @@ if uploaded_file is not None:
                 except Exception as e:
                     print(f"DB Error: {e}")
 
-                # --- 顯示成功結果 ---
                 st.success("Analysis Complete!")
                 st.image(final_image, caption="Generated by PetOS", use_column_width=True)
                 
                 st.download_button(
-                    label="📥 Download Image (下載美圖)",
+                    label="📥 Download Image",
                     data=img_bytes,
                     file_name="petos_polaroid.jpg",
                     mime="image/jpeg",
                     use_container_width=True
                 )
-                
-                # [注意] 這裡沒有 st.rerun()，圖片會停在畫面上供下載
 
         except Exception as e:
-            st.error(f"系統暫時繁忙，請稍後再試。Error: {e}")
+            st.error(f"系統暫時繁忙，所有模型皆無回應。Error: {e}")
 
 else:
     st.info("👆 Upload a photo to start!")
