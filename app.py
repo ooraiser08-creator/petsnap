@@ -11,7 +11,7 @@ import time
 
 # --- 設定區 ---
 # 請確認這裡是你自己的 Lemon Squeezy 連結
-LEMON_SQUEEZY_LINK = "https://petos.lemonsqueezy.com/checkout/buy/......" 
+LEMON_SQUEEZY_LINK = "https://petos.lemonsqueezy.com/checkout/buy/da91c266-7236-4a64-aea8-79cdce90706d" 
 ACCESS_CODE = "VIP2025"
 FREE_LIMIT = 3
 
@@ -60,9 +60,38 @@ try:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     supabase = create_client(supabase_url, supabase_key)
+    genai.configure(api_key=api_key) # 先全域設定好 API Key
 except:
     st.error("系統設定有誤，請檢查 Secrets")
     st.stop()
+
+# --- [關鍵功能] 智慧模型選擇器 (Auto-Fallback) ---
+def generate_content_safe(prompt, image):
+    # 這是我們的備選清單，從最便宜/最穩定的開始排
+    # 只要這三個裡面有一個活著，你的網站就不會掛
+    model_list = [
+        'gemini-1.5-flash',       # 首選：通用 Flash
+        'gemini-1.5-flash-002',   # 備選1：指定版本 Flash (超穩)
+        'gemini-1.5-flash-001',   # 備選2：舊版 Flash
+        'gemini-1.5-pro'          # 最後手段：Pro (貴一點但一定有)
+    ]
+    
+    last_error = None
+    
+    for model_name in model_list:
+        try:
+            # 嘗試使用目前的模型
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content([prompt, image])
+            return response # 如果成功，直接回傳結果，結束迴圈
+        except Exception as e:
+            # 如果失敗，記錄錯誤，然後繼續試下一個模型
+            print(f"模型 {model_name} 失敗，嘗試下一個... 錯誤: {e}")
+            last_error = e
+            continue
+            
+    # 如果全部都失敗，才拋出錯誤
+    raise last_error
 
 # --- 3. Cookie 認人機制 ---
 cookie_manager = stx.CookieManager()
@@ -147,9 +176,6 @@ if uploaded_file is not None:
 
     if st.button(btn_text):
         try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-
             if target_language == "English":
                 prompt = "Analyze this photo. Write ONE short, funny, sassy internal monologue. Strict Rules: Max 15 words. No intro. Use Gen Z slang. DO NOT use emojis."
             elif target_language == "Thai (ภาษาไทย)":
@@ -158,11 +184,14 @@ if uploaded_file is not None:
                 prompt = "請看這張照片。寫一句這隻寵物現在心裡的 OS。嚴格規則：繁體中文，台灣鄉民梗，有點賤賤的。20字以內。不要前言。絕對不要用表情符號。"
 
             with st.spinner(loading):
-                response = model.generate_content([prompt, image])
+                # A. [智慧生成] 呼叫我們寫好的安全函式
+                response = generate_content_safe(prompt, image)
                 os_text = response.text
                 
+                # B. 圖片合成
                 final_image = create_polaroid(image, os_text, target_language)
                 
+                # C. 上傳與存檔
                 img_byte_arr = io.BytesIO()
                 final_image.save(img_byte_arr, format='JPEG', quality=80)
                 img_bytes = img_byte_arr.getvalue()
@@ -170,7 +199,6 @@ if uploaded_file is not None:
                 timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
                 file_name = f"{user_id}_{timestamp}.jpg"
                 
-                # 上傳 Supabase (這裡已經會扣除次數了，因為 insert logs 了)
                 try:
                     supabase.storage.from_("photos").upload(path=file_name, file=img_bytes, file_options={"content-type": "image/jpeg"})
                     public_url = supabase.storage.from_("photos").get_public_url(file_name)
@@ -198,13 +226,9 @@ if uploaded_file is not None:
                     mime="image/jpeg",
                     use_container_width=True
                 )
-                
-                # [修正] 移除自動刷新，讓圖片停留在畫面上
-                # time.sleep(1)
-                # st.rerun() 
 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"系統暫時繁忙，請稍後再試。Error: {e}")
 
 else:
     st.info("👆 Upload a photo to start!")
