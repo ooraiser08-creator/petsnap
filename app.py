@@ -10,10 +10,9 @@ import extra_streamlit_components as stx
 import time
 
 # --- ⚙️ 設定區 ---
-# 請確認這裡是你自己的 Lemon Squeezy 結帳連結
 LEMON_SQUEEZY_LINK = "https://petos.lemonsqueezy.com/checkout/buy/da91c266-7236-4a64-aea8-79cdce90706d" 
-ACCESS_CODE = "VIP2025" # 付費解鎖碼
-FREE_LIMIT = 3 # 免費次數
+ACCESS_CODE = "VIP2025"
+FREE_LIMIT = 3
 
 # --- 1. 網頁基礎設定 ---
 st.set_page_config(
@@ -60,23 +59,47 @@ try:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     
-    # 連線 Supabase
     supabase = create_client(supabase_url, supabase_key)
-    
-    # 設定 Gemini (綁卡後使用 1.5-flash 最穩)
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-
 except Exception as e:
-    st.error(f"系統設定錯誤，請檢查 Secrets: {e}")
+    st.error(f"系統設定錯誤: {e}")
     st.stop()
 
-# --- 3. Cookie 認人機制 (解決重新整理次數重置問題) ---
+# --- [關鍵] 智慧模型輪詢函式 ---
+def generate_with_fallback(prompt, image):
+    # 這裡列出所有可能的模型名字，一個一個試
+    candidate_models = [
+        'gemini-1.5-flash-001', # 最穩定的特定版本
+        'gemini-1.5-flash',     # 通用別名
+        'gemini-1.5-flash-002', # 更新版
+        'gemini-1.5-pro',       # 貴一點但通常都有
+        'gemini-pro'            # 舊版保底
+    ]
+    
+    last_error = None
+    
+    for model_name in candidate_models:
+        try:
+            # 嘗試建立模型
+            model = genai.GenerativeModel(model_name)
+            # 嘗試生成內容
+            response = model.generate_content([prompt, image])
+            # 如果成功，直接回傳，並跳出迴圈
+            return response
+        except Exception as e:
+            # 如果失敗，記錄錯誤，繼續試下一個
+            print(f"嘗試模型 {model_name} 失敗: {e}")
+            last_error = e
+            continue
+    
+    # 如果全部都失敗，才報錯
+    raise last_error
+
+# --- 3. Cookie 認人機制 ---
 cookie_manager = stx.CookieManager()
 cookies = cookie_manager.get_all()
 user_id = cookies.get("petos_user_id")
 
-# 如果是用戶第一次來，發一張身分證 (Cookie)
 if not user_id:
     new_id = str(uuid.uuid4())
     cookie_manager.set("petos_user_id", new_id, expires_at=datetime.datetime(year=2030, month=1, day=1))
@@ -84,10 +107,8 @@ if not user_id:
     time.sleep(0.5)
     st.rerun()
 
-# 檢查是否為付費會員
 is_premium = cookies.get("petos_is_premium") == "true"
 
-# 側邊欄：輸入通行碼
 with st.sidebar:
     st.header("💎 Premium Access")
     code_input = st.text_input("Enter Access Code", type="password")
@@ -100,7 +121,6 @@ with st.sidebar:
 # --- 4. 查詢使用次數 ---
 def get_usage_count(uid):
     try:
-        # 去資料庫數數看這個人用了幾次
         response = supabase.table("logs").select("id", count="exact").eq("user_id", uid).execute()
         return response.count
     except:
@@ -123,12 +143,10 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, use_column_width=True)
 
-    # --- 判斷權限 (收費牆) ---
     if not is_premium:
         if remaining_usage > 0:
             st.markdown(f'<div class="usage-counter">⚡ Free tries left: {remaining_usage} / {FREE_LIMIT}</div>', unsafe_allow_html=True)
         else:
-            # --- 擋住！顯示付款按鈕 ---
             st.error("🚫 Free limit reached! (免費次數已用完)")
             st.markdown(f"""
                 <div style="text-align: center; padding: 20px; border: 2px dashed #FF4B4B; border-radius: 10px; margin-top: 10px;">
@@ -144,11 +162,8 @@ if uploaded_file is not None:
                     </p>
                 </div>
             """, unsafe_allow_html=True)
-            st.stop() # 停止執行下方代碼
+            st.stop()
 
-    # --- 核心運作區 (付費或有額度才執行) ---
-    
-    # 設定按鈕文字
     if target_language == "English":
         btn_text = "🔮 Read My Pet's Mind!"
         loading = "Connecting to Pet Planet..."
@@ -161,7 +176,6 @@ if uploaded_file is not None:
 
     if st.button(btn_text):
         try:
-            # --- Prompt (嚴格禁止 Emoji) ---
             if target_language == "English":
                 prompt = "Analyze this photo. Write ONE short, funny, sassy internal monologue. Strict Rules: Max 15 words. No intro. Use Gen Z slang. DO NOT use emojis."
             elif target_language == "Thai (ภาษาไทย)":
@@ -170,14 +184,12 @@ if uploaded_file is not None:
                 prompt = "請看這張照片。寫一句這隻寵物現在心裡的 OS。嚴格規則：繁體中文，台灣鄉民梗，有點賤賤的。20字以內。不要前言。絕對不要用表情符號。"
 
             with st.spinner(loading):
-                # A. AI 生成
-                response = model.generate_content([prompt, image])
+                # 呼叫我們的輪詢函式
+                response = generate_with_fallback(prompt, image)
                 os_text = response.text
                 
-                # B. 圖片合成
                 final_image = create_polaroid(image, os_text, target_language)
                 
-                # C. 上傳與存檔
                 img_byte_arr = io.BytesIO()
                 final_image.save(img_byte_arr, format='JPEG', quality=80)
                 img_bytes = img_byte_arr.getvalue()
@@ -185,18 +197,12 @@ if uploaded_file is not None:
                 timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
                 file_name = f"{user_id}_{timestamp}.jpg"
                 
-                # 上傳 Supabase Storage
                 try:
-                    supabase.storage.from_("photos").upload(
-                        path=file_name, 
-                        file=img_bytes, 
-                        file_options={"content-type": "image/jpeg"}
-                    )
+                    supabase.storage.from_("photos").upload(path=file_name, file=img_bytes, file_options={"content-type": "image/jpeg"})
                     public_url = supabase.storage.from_("photos").get_public_url(file_name)
                 except:
                     public_url = "upload_failed"
 
-                # 寫入 Supabase Database
                 try:
                     data = {
                         "user_id": user_id,
@@ -208,22 +214,19 @@ if uploaded_file is not None:
                 except Exception as e:
                     print(f"DB Error: {e}")
 
-                # --- 顯示成功結果 ---
                 st.success("Analysis Complete!")
                 st.image(final_image, caption="Generated by PetOS", use_column_width=True)
                 
                 st.download_button(
-                    label="📥 Download Image (下載美圖)",
+                    label="📥 Download Image",
                     data=img_bytes,
                     file_name="petos_polaroid.jpg",
                     mime="image/jpeg",
                     use_container_width=True
                 )
-                
-                # 注意：這裡移除 st.rerun() 以避免圖片消失
 
         except Exception as e:
-            st.error(f"系統暫時繁忙，請稍後再試。Error: {e}")
+            st.error(f"系統繁忙，所有模型皆忙碌中，請稍後再試。Error: {e}")
 
 else:
     st.info("👆 Upload a photo to start!")
