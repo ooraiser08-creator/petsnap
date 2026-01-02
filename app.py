@@ -64,11 +64,7 @@ except:
     st.stop()
 
 # --- 3. [關鍵修正] Cookie 認人機制 ---
-@st.cache_resource(experimental_allow_widgets=True)
-def get_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_manager()
+cookie_manager = stx.CookieManager()
 
 # 嘗試讀取餅乾
 cookies = cookie_manager.get_all()
