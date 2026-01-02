@@ -1,3 +1,4 @@
+# Fix return bug
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import textwrap
 
