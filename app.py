@@ -60,37 +60,33 @@ try:
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     supabase = create_client(supabase_url, supabase_key)
-    genai.configure(api_key=api_key) # 先全域設定好 API Key
+    genai.configure(api_key=api_key)
 except:
     st.error("系統設定有誤，請檢查 Secrets")
     st.stop()
 
-# --- [關鍵功能] 智慧模型選擇器 (Auto-Fallback) ---
+# --- [關鍵功能] 智慧模型選擇器 (已加入 2.5) ---
 def generate_content_safe(prompt, image):
-    # 這是我們的備選清單，從最便宜/最穩定的開始排
-    # 只要這三個裡面有一個活著，你的網站就不會掛
     model_list = [
-        'gemini-1.5-flash',       # 首選：通用 Flash
-        'gemini-1.5-flash-002',   # 備選1：指定版本 Flash (超穩)
-        'gemini-1.5-flash-001',   # 備選2：舊版 Flash
-        'gemini-1.5-pro'          # 最後手段：Pro (貴一點但一定有)
+        'gemini-2.5-flash',       # 你帳號有的
+        'gemini-2.0-flash-exp',   # 你帳號有的
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-002',
+        'gemini-1.5-pro'
     ]
     
     last_error = None
     
     for model_name in model_list:
         try:
-            # 嘗試使用目前的模型
             model = genai.GenerativeModel(model_name)
             response = model.generate_content([prompt, image])
-            return response # 如果成功，直接回傳結果，結束迴圈
+            return response 
         except Exception as e:
-            # 如果失敗，記錄錯誤，然後繼續試下一個模型
-            print(f"模型 {model_name} 失敗，嘗試下一個... 錯誤: {e}")
+            print(f"模型 {model_name} 失敗: {e}")
             last_error = e
             continue
             
-    # 如果全部都失敗，才拋出錯誤
     raise last_error
 
 # --- 3. Cookie 認人機制 ---
@@ -141,7 +137,6 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, use_column_width=True)
 
-    # --- 判斷權限 ---
     if not is_premium:
         if remaining_usage > 0:
             st.markdown(f'<div class="usage-counter">⚡ Free tries left: {remaining_usage} / {FREE_LIMIT}</div>', unsafe_allow_html=True)
@@ -163,7 +158,6 @@ if uploaded_file is not None:
             """, unsafe_allow_html=True)
             st.stop()
 
-    # --- 核心運作區 ---
     if target_language == "English":
         btn_text = "🔮 Read My Pet's Mind!"
         loading = "Connecting to Pet Planet..."
@@ -184,14 +178,12 @@ if uploaded_file is not None:
                 prompt = "請看這張照片。寫一句這隻寵物現在心裡的 OS。嚴格規則：繁體中文，台灣鄉民梗，有點賤賤的。20字以內。不要前言。絕對不要用表情符號。"
 
             with st.spinner(loading):
-                # A. [智慧生成] 呼叫我們寫好的安全函式
+                # 呼叫我們的新函式
                 response = generate_content_safe(prompt, image)
                 os_text = response.text
                 
-                # B. 圖片合成
                 final_image = create_polaroid(image, os_text, target_language)
                 
-                # C. 上傳與存檔
                 img_byte_arr = io.BytesIO()
                 final_image.save(img_byte_arr, format='JPEG', quality=80)
                 img_bytes = img_byte_arr.getvalue()
