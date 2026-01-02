@@ -228,4 +228,4 @@ if uploaded_file is not None:
             st.error(f"Error: {e}")
 
 else:
-    st.info("👆 Upload a photo to start!")ｓ
+    st.info("👆 Upload a photo to start!")
