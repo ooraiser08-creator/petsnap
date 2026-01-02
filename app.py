@@ -28,28 +28,9 @@ st.markdown("""
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
-        .stButton button {
-            width: 100%;
-            background-color: #FF4B4B;
-            color: white;
-            font-weight: bold;
-            border-radius: 12px;
-            padding: 0.5rem 1rem;
-            border: none;
-        }
-        .stButton button:hover {
-            background-color: #FF2B2B;
-            color: white;
-        }
-        .usage-counter {
-            text-align: center;
-            font-size: 0.9rem;
-            color: #666;
-            background-color: #f0f2f6;
-            padding: 5px;
-            border-radius: 5px;
-            margin-bottom: 10px;
-        }
+        .stButton button { width: 100%; background-color: #FF4B4B; color: white; font-weight: bold; border-radius: 12px; border: none; padding: 0.5rem 1rem; }
+        .stButton button:hover { background-color: #FF2B2B; color: white; }
+        .usage-counter { text-align: center; font-size: 0.9rem; color: #666; background-color: #f0f2f6; padding: 5px; border-radius: 5px; margin-bottom: 10px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -65,69 +46,69 @@ except Exception as e:
     st.error(f"系統設定錯誤: {e}")
     st.stop()
 
-# --- [關鍵功能] 智慧模型輪詢函式 (自動換備胎) ---
+# --- [修正 1] 智慧模型輪詢函式 (解決 404/429 問題) ---
 def generate_content_safe(prompt, image):
-    # 這是我們的備選清單，依照優先順序排列
-    # 包含了你帳號裡可能有的所有新舊版本
+    # 優先順序清單：新版 -> 穩定版 -> 舊版 -> Pro
     model_list = [
-        'gemini-2.5-flash',       # 第一順位：最新版 (你之前截圖裡有)
-        'gemini-1.5-flash-001',   # 第二順位：最穩定的第一代
-        'gemini-1.5-flash-002',   # 第三順位：第二代
-        'gemini-2.0-flash-exp',   # 第四順位：實驗版
-        'gemini-1.5-flash',       # 第五順位：通用別名
-        'gemini-1.5-pro'          # 最後保底
+        'gemini-2.5-flash',       
+        'gemini-1.5-flash',     
+        'gemini-1.5-flash-001',
+        'gemini-1.5-flash-002',
+        'gemini-2.0-flash-exp',   
+        'gemini-1.5-pro'          
     ]
     
     last_error = None
     
     for model_name in model_list:
         try:
-            # 嘗試建立模型
             model = genai.GenerativeModel(model_name)
-            # 嘗試生成
             response = model.generate_content([prompt, image])
-            # 成功就直接回傳，不試了
             return response
         except Exception as e:
-            # 失敗了就在後台印出錯誤，然後試下一個
-            print(f"模型 {model_name} 失敗，嘗試下一個... ({e})")
+            print(f"模型 {model_name} 失敗，切換下一個... ({e})")
             last_error = e
             continue
             
-    # 如果全部都失敗，才拋出錯誤給用戶看
     raise last_error
 
-# --- 3. Cookie 認人機制 ---
-cookie_manager = stx.CookieManager(key="petos_manager_v2") # 改個 key 強制重整
-cookies = cookie_manager.get_all()
-
-# Session State 優先檢查
-if 'user_id' not in st.session_state:
+# --- [修正 2] 強化版 Cookie 認人機制 (解決重新整理歸零問題) ---
+def get_user_id():
+    # 1. 初始化 Cookie Manager (加 key 避免重置)
+    cookie_manager = stx.CookieManager(key="petos_auth")
+    
+    # 2. 強制等待瀏覽器載入餅乾 (關鍵！)
+    # Streamlit 重新整理時，Cookie 讀取會有延遲，我們手動等它一下
+    cookies = cookie_manager.get_all()
+    if not cookies:
+        time.sleep(0.2)
+        cookies = cookie_manager.get_all()
+    
+    # 3. 嘗試讀取舊 ID
     cookie_id = cookies.get("petos_user_id")
-    if cookie_id:
-        st.session_state.user_id = cookie_id
-    else:
+    
+    # 4. 如果真的沒有 (是新用戶)，才發新 ID
+    if not cookie_id:
         new_id = str(uuid.uuid4())
-        cookie_manager.set("petos_user_id", new_id, expires_at=datetime.datetime(year=2030, month=1, day=1))
-        st.session_state.user_id = new_id
-        time.sleep(0.5)
+        # 設定過期時間為 400 天後
+        cookie_manager.set("petos_user_id", new_id, expires_at=datetime.datetime.now() + datetime.timedelta(days=400))
+        return new_id
+    
+    return cookie_id
 
-user_id = st.session_state.user_id
+# 執行認人程序
+user_id = get_user_id()
 
-# 檢查付費
-if 'is_premium' not in st.session_state:
-    cookie_premium = cookies.get("petos_is_premium")
-    st.session_state.is_premium = (cookie_premium == "true")
+# --- VIP 判斷 ---
+cookie_manager_vip = stx.CookieManager(key="petos_vip") # 用另一個 key
+cookies_vip = cookie_manager_vip.get_all()
+is_premium = cookies_vip.get("petos_is_premium") == "true"
 
-is_premium = st.session_state.is_premium
-
-# --- VIP 側邊欄 ---
 with st.sidebar:
     st.header("💎 Premium Access")
     code_input = st.text_input("Enter Access Code", type="password")
     if code_input == ACCESS_CODE:
-        cookie_manager.set("petos_is_premium", "true", expires_at=datetime.datetime(year=2030, month=1, day=1))
-        st.session_state.is_premium = True
+        cookie_manager_vip.set("petos_is_premium", "true", expires_at=datetime.datetime.now() + datetime.timedelta(days=400))
         st.success("Verified! Refreshing...")
         time.sleep(1)
         st.rerun()
@@ -135,6 +116,8 @@ with st.sidebar:
 # --- 4. 查詢使用次數 ---
 def get_usage_count(uid):
     try:
+        # 這裡加個 print 方便你在雲端 log 檢查是不是同一個 ID
+        print(f"Checking usage for ID: {uid}") 
         response = supabase.table("logs").select("id", count="exact").eq("user_id", uid).execute()
         return response.count
     except:
@@ -157,6 +140,7 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, use_column_width=True)
 
+    # --- 判斷權限 (收費牆) ---
     if not is_premium:
         if remaining_usage > 0:
             st.markdown(f'<div class="usage-counter">⚡ Free tries left: {remaining_usage} / {FREE_LIMIT}</div>', unsafe_allow_html=True)
@@ -178,6 +162,7 @@ if uploaded_file is not None:
             """, unsafe_allow_html=True)
             st.stop()
 
+    # --- 核心運作區 ---
     if target_language == "English":
         btn_text = "🔮 Read My Pet's Mind!"
         loading = "Connecting to Pet Planet..."
@@ -198,7 +183,7 @@ if uploaded_file is not None:
                 prompt = "請看這張照片。寫一句這隻寵物現在心裡的 OS。嚴格規則：繁體中文，台灣鄉民梗，有點賤賤的。20字以內。不要前言。絕對不要用表情符號。"
 
             with st.spinner(loading):
-                # 呼叫我們的「智慧防當機」函式
+                # 使用 [修正 1] 的智慧模型函式
                 response = generate_content_safe(prompt, image)
                 os_text = response.text
                 
@@ -219,7 +204,7 @@ if uploaded_file is not None:
 
                 try:
                     data = {
-                        "user_id": user_id,
+                        "user_id": user_id, # 使用 [修正 2] 抓到的穩定 ID
                         "image_url": public_url,
                         "ai_text": os_text,
                         "session_id": user_id
@@ -240,7 +225,7 @@ if uploaded_file is not None:
                 )
 
         except Exception as e:
-            st.error(f"系統暫時繁忙，所有模型皆無回應。Error: {e}")
+            st.error(f"Error: {e}")
 
 else:
-    st.info("👆 Upload a photo to start!")
+    st.info("👆 Upload a photo to start!")ｓ
